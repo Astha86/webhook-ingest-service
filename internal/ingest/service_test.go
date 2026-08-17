@@ -81,4 +81,13 @@ func TestDuplicateDeliveryIsIgnored(t *testing.T) {
 	if n != 1 {
 		t.Fatalf("stored %d copies of %s, want 1", n, eventID)
 	}
+
+	accountStats, err := st.AccountStats(ctx, accountID)
+	if err != nil {
+		t.Fatalf("AccountStats: %v", err)
+	}
+	if accountStats.CallCount != 1 {
+		t.Fatalf("account stats call count is %d after duplicate deliveries, want 1", accountStats.CallCount)
+	}
 }
+
