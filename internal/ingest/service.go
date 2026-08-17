@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -22,6 +23,7 @@ type Service struct {
 	cache *stats.Cache
 	rdb   *redis.Client
 	log   *slog.Logger
+	wg    sync.WaitGroup
 }
 
 // New builds a Service.
@@ -63,11 +65,12 @@ func (s *Service) Ingest(ctx context.Context, evt Event) error {
 
 	s.cache.Record(rec.AccountID, rec.DurationSec)
 
-
 	// Recordings are slow to fetch, so that part does not block the provider.
 	if rec.RecordingURL != "" {
+		s.wg.Add(1)
 		bgCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 		go func() {
+			defer s.wg.Done()
 			defer cancel()
 			if err := s.processRecording(bgCtx, rec); err != nil {
 				s.log.Error(
@@ -80,8 +83,23 @@ func (s *Service) Ingest(ctx context.Context, evt Event) error {
 		}()
 	}
 
-
 	return nil
+}
+
+// Shutdown waits for active background tasks to complete or until the context expires.
+func (s *Service) Shutdown(ctx context.Context) error {
+	done := make(chan struct{})
+	go func() {
+		s.wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // processRecording downloads and transcodes the call recording, then marks
@@ -90,3 +108,4 @@ func (s *Service) processRecording(ctx context.Context, rec store.Event) error {
 	time.Sleep(recordingWork)
 	return s.store.MarkRecordingProcessed(ctx, rec.CallID)
 }
+
